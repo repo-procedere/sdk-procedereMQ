@@ -53,9 +53,20 @@ type PublishOptions struct {
 	RunAt    *time.Time
 }
 
+type ClientOptions struct {
+	Timeout    time.Duration
+	APIKey     string
+	Username   string
+	Password   string
+	HTTPClient *http.Client
+}
+
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	apiKey     string
+	username   string
+	password   string
 }
 
 type Producer struct {
@@ -69,11 +80,26 @@ type Consumer struct {
 }
 
 func NewClient(baseURL string) *Client {
+	return NewClientWithOptions(baseURL, ClientOptions{})
+}
+
+func NewClientWithOptions(baseURL string, opts ClientOptions) *Client {
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		timeout := opts.Timeout
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+		httpClient = &http.Client{
+			Timeout: timeout,
+		}
+	}
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		httpClient: httpClient,
+		apiKey:     strings.TrimSpace(opts.APIKey),
+		username:   strings.TrimSpace(opts.Username),
+		password:   opts.Password,
 	}
 }
 
@@ -249,6 +275,11 @@ func (c *Client) doJSON(ctx context.Context, method string, endpoint string, in 
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	} else if c.username != "" && strings.TrimSpace(c.password) != "" {
+		req.SetBasicAuth(c.username, c.password)
 	}
 
 	res, err := c.httpClient.Do(req)
