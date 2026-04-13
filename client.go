@@ -27,30 +27,33 @@ const (
 )
 
 type Job struct {
-	ID        string          `json:"id"`
-	Queue     string          `json:"queue"`
-	Payload   json.RawMessage `json:"payload"`
-	Status    JobStatus       `json:"status"`
-	LastError string          `json:"last_error,omitempty"`
-	Attempts  int             `json:"attempts"`
-	MaxRetry  int             `json:"max_retry"`
-	RunAt     time.Time       `json:"run_at"`
-	LockedAt  time.Time       `json:"locked_at"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID                string          `json:"id"`
+	Queue             string          `json:"queue"`
+	Payload           json.RawMessage `json:"payload"`
+	Status            JobStatus       `json:"status"`
+	LastError         string          `json:"last_error,omitempty"`
+	Attempts          int             `json:"attempts"`
+	MaxRetry          int             `json:"max_retry"`
+	VisibilityTimeout int             `json:"visibility_timeout"`
+	RunAt             time.Time       `json:"run_at"`
+	LockedAt          time.Time       `json:"locked_at"`
+	CreatedAt         time.Time       `json:"created_at"`
 }
 
 type EnqueueRequest struct {
-	ID       string          `json:"id,omitempty"`
-	Queue    string          `json:"queue"`
-	Payload  json.RawMessage `json:"payload,omitempty"`
-	MaxRetry int             `json:"max_retry,omitempty"`
-	RunAt    *time.Time      `json:"run_at,omitempty"`
+	ID                string          `json:"id,omitempty"`
+	Queue             string          `json:"queue"`
+	Payload           json.RawMessage `json:"payload,omitempty"`
+	MaxRetry          int             `json:"max_retry,omitempty"`
+	VisibilityTimeout int             `json:"visibility_timeout,omitempty"`
+	RunAt             *time.Time      `json:"run_at,omitempty"`
 }
 
 type PublishOptions struct {
-	ID       string
-	MaxRetry int
-	RunAt    *time.Time
+	ID                string
+	MaxRetry          int
+	VisibilityTimeout int
+	RunAt             *time.Time
 }
 
 type ClientOptions struct {
@@ -150,6 +153,21 @@ func (c *Client) Enqueue(ctx context.Context, req EnqueueRequest) (Job, error) {
 	return out, nil
 }
 
+func (c *Client) Redrive(ctx context.Context, queueName string) (int, error) {
+	if strings.TrimSpace(queueName) == "" {
+		return 0, errors.New("queue name is required")
+	}
+	var out struct {
+		Status string `json:"status"`
+		Count  int    `json:"count"`
+	}
+	endpoint := "/api/redrive?queue=" + url.QueryEscape(queueName)
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, nil, http.StatusOK, &out); err != nil {
+		return 0, err
+	}
+	return out.Count, nil
+}
+
 func (c *Client) Dequeue(ctx context.Context, queue string) (Job, error) {
 	if strings.TrimSpace(queue) == "" {
 		return Job{}, errors.New("queue is required")
@@ -194,11 +212,12 @@ func (p *Producer) Publish(ctx context.Context, payload any, opts PublishOptions
 		return Job{}, err
 	}
 	return p.client.Enqueue(ctx, EnqueueRequest{
-		ID:       opts.ID,
-		Queue:    p.queue,
-		Payload:  raw,
-		MaxRetry: opts.MaxRetry,
-		RunAt:    opts.RunAt,
+		ID:                opts.ID,
+		Queue:             p.queue,
+		Payload:           raw,
+		MaxRetry:          opts.MaxRetry,
+		VisibilityTimeout: opts.VisibilityTimeout,
+		RunAt:             opts.RunAt,
 	})
 }
 
