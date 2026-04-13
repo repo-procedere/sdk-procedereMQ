@@ -47,9 +47,25 @@ type EnqueueRequest struct {
 	RunAt    *time.Time      `json:"run_at,omitempty"`
 }
 
+type PublishOptions struct {
+	ID       string
+	MaxRetry int
+	RunAt    *time.Time
+}
+
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+}
+
+type Producer struct {
+	client *Client
+	queue  string
+}
+
+type Consumer struct {
+	client *Client
+	queue  string
 }
 
 func NewClient(baseURL string) *Client {
@@ -59,6 +75,42 @@ func NewClient(baseURL string) *Client {
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+func NewProducer(baseURL string, queue string) (*Producer, error) {
+	return NewProducerWithClient(NewClient(baseURL), queue)
+}
+
+func NewProducerWithClient(client *Client, queue string) (*Producer, error) {
+	if client == nil {
+		return nil, errors.New("client is required")
+	}
+	queue = strings.TrimSpace(queue)
+	if queue == "" {
+		return nil, errors.New("queue is required")
+	}
+	return &Producer{
+		client: client,
+		queue:  queue,
+	}, nil
+}
+
+func NewConsumer(baseURL string, queue string) (*Consumer, error) {
+	return NewConsumerWithClient(NewClient(baseURL), queue)
+}
+
+func NewConsumerWithClient(client *Client, queue string) (*Consumer, error) {
+	if client == nil {
+		return nil, errors.New("client is required")
+	}
+	queue = strings.TrimSpace(queue)
+	if queue == "" {
+		return nil, errors.New("queue is required")
+	}
+	return &Consumer{
+		client: client,
+		queue:  queue,
+	}, nil
 }
 
 func (c *Client) Enqueue(ctx context.Context, req EnqueueRequest) (Job, error) {
@@ -100,6 +152,85 @@ func (c *Client) Fail(ctx context.Context, id string) error {
 		return errors.New("id is required")
 	}
 	return c.doJSON(ctx, http.MethodPost, "/fail", map[string]string{"id": id}, http.StatusOK, nil)
+}
+
+func (p *Producer) Queue() string {
+	return p.queue
+}
+
+func (p *Producer) Client() *Client {
+	return p.client
+}
+
+func (p *Producer) Publish(ctx context.Context, payload any, opts PublishOptions) (Job, error) {
+	raw, err := marshalPayload(payload)
+	if err != nil {
+		return Job{}, err
+	}
+	return p.client.Enqueue(ctx, EnqueueRequest{
+		ID:       opts.ID,
+		Queue:    p.queue,
+		Payload:  raw,
+		MaxRetry: opts.MaxRetry,
+		RunAt:    opts.RunAt,
+	})
+}
+
+func (c *Consumer) Queue() string {
+	return c.queue
+}
+
+func (c *Consumer) Client() *Client {
+	return c.client
+}
+
+func (c *Consumer) Receive(ctx context.Context) (Job, error) {
+	return c.client.Dequeue(ctx, c.queue)
+}
+
+func (c *Consumer) Ack(ctx context.Context, jobID string) error {
+	return c.client.Ack(ctx, jobID)
+}
+
+func (c *Consumer) AckJob(ctx context.Context, job Job) error {
+	return c.client.Ack(ctx, job.ID)
+}
+
+func (c *Consumer) Fail(ctx context.Context, jobID string) error {
+	return c.client.Fail(ctx, jobID)
+}
+
+func (c *Consumer) FailJob(ctx context.Context, job Job) error {
+	return c.client.Fail(ctx, job.ID)
+}
+
+func marshalPayload(payload any) (json.RawMessage, error) {
+	if payload == nil {
+		return json.RawMessage(`{}`), nil
+	}
+	switch v := payload.(type) {
+	case json.RawMessage:
+		if len(v) == 0 {
+			return json.RawMessage(`{}`), nil
+		}
+		return v, nil
+	case []byte:
+		if len(v) == 0 {
+			return json.RawMessage(`{}`), nil
+		}
+		return json.RawMessage(v), nil
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return json.RawMessage(`{}`), nil
+		}
+		return json.RawMessage(v), nil
+	default:
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		return raw, nil
+	}
 }
 
 func (c *Client) doJSON(ctx context.Context, method string, endpoint string, in any, expectedStatus int, out any) error {
